@@ -41,11 +41,28 @@ async function startServer() {
         ws.on("message", async (message) => {
             console.log("Comando recibido del frontend:", message);
 
-            // Enviar comando a RabbitMQ (backend Go procesará este comando)
-            channel.sendToQueue("car_commands", Buffer.from(message), { persistent: true });
+            try {
+                // Parsear el mensaje recibido (JSON)
+                const command = JSON.parse(message);
+                console.log("Comando JSON recibido:", command);
 
-            // Enviar el comando a MQTT (enviar al ESP32)
-            mqttClient.publish("car/control", message); // Enviar al topic "car/control"
+                // Verifica el comando y actúa en consecuencia
+                if (command.command) {
+                    // Log del mensaje antes de enviarlo a RabbitMQ
+                    console.log("Enviando mensaje a RabbitMQ:", command);
+
+                    // Convertir el mensaje a JSON y enviarlo a RabbitMQ
+                    const jsonMessage = JSON.stringify(command);  // Asegurarse de que sea un string JSON
+                    channel.sendToQueue("car_commands", Buffer.from(jsonMessage), { persistent: true });
+
+                    // Enviar el comando a MQTT (enviar al ESP32)
+                    mqttClient.publish("car/control", jsonMessage); // Enviar al topic "car/control"
+                } else {
+                    console.log("Comando inválido.");
+                }
+            } catch (error) {
+                console.error("Error al parsear el mensaje recibido:", error);
+            }
         });
 
         // Función para consumir mensajes desde la cola de datos de sensores
@@ -53,9 +70,22 @@ async function startServer() {
             const queue = "sensor_data";
             await channel.consume(queue, (msg) => {
                 if (msg !== null) {
-                    console.log("Enviando datos al WebSocket:", msg.content.toString());
-                    ws.send(msg.content.toString());  // Enviar datos al frontend
-                    channel.ack(msg);  // Confirmar mensaje consumido
+                    // Convertir el buffer a string
+                    const messageString = msg.content.toString();
+
+                    // Intentar parsear el mensaje como JSON
+                    try {
+                        const sensorData = JSON.parse(messageString);
+                        console.log("Enviando datos al WebSocket:", sensorData);
+
+                        // Enviar datos al frontend como JSON
+                        ws.send(JSON.stringify(sensorData));  // Enviar como un string JSON
+
+                        // Confirmar mensaje consumido
+                        channel.ack(msg);
+                    } catch (error) {
+                        console.error("Error al parsear el mensaje de los sensores:", error);
+                    }
                 }
             });
         };
@@ -68,9 +98,10 @@ async function startServer() {
     });
 
     // Configurar el servidor HTTP para WebSocket
-    app.server = app.listen(port, "0.0.0.0", () => {
-        console.log(`Servidor WebSocket en http://44.205.54.88:${port}`);
-    });
+   app.server = app.listen(port, "0.0.0.0", () => {
+    console.log(`Servidor WebSocket en http://0.0.0.0:${port}`);
+});
+
 
     app.server.on("upgrade", (request, socket, head) => {
         wss.handleUpgrade(request, socket, head, (ws) => {
